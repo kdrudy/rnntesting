@@ -1,0 +1,11 @@
+<component name="libraryTable">
+  <library name="Gradle: org.datavec:datavec-nd4j-common:0.7.2">
+    <CLASSES>
+      <root url="jar://$USER_HOME$/.gradle/caches/modules-2/files-2.1/org.datavec/datavec-nd4j-common/0.7.2/69e4f7fca9474d23b09429f3915c1488b2e9172c/datavec-nd4j-common-0.7.2.jar!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES>
+      <root url="jar://$USER_HOME$/.gradle/caches/modules-2/files-2.1/org.datavec/datavec-nd4j-common/0.7.2/8e567801767e6acc1971e25c47b4555a50f30df9/datavec-nd4j-common-0.7.2-sources.jar!/" />
+    </SOURCES>
+  </library>
+</component>
