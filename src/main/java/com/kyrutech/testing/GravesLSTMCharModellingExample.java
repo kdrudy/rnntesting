@@ -1,6 +1,10 @@
 package com.kyrutech.testing;
 
 import org.apache.commons.io.FileUtils;
+import org.datavec.api.records.reader.SequenceRecordReader;
+import org.datavec.api.records.reader.impl.csv.CSVSequenceRecordReader;
+import org.datavec.api.split.FileSplit;
+import org.deeplearning4j.datasets.datavec.SequenceRecordReaderDataSetIterator;
 import org.deeplearning4j.nn.api.Layer;
 import org.deeplearning4j.nn.api.OptimizationAlgorithm;
 import org.deeplearning4j.nn.conf.BackpropType;
@@ -16,14 +20,19 @@ import org.deeplearning4j.util.ModelSerializer;
 import org.nd4j.linalg.activations.Activation;
 import org.nd4j.linalg.api.ndarray.INDArray;
 import org.nd4j.linalg.dataset.DataSet;
+import org.nd4j.linalg.dataset.api.iterator.DataSetIterator;
 import org.nd4j.linalg.factory.Nd4j;
 import org.nd4j.linalg.lossfunctions.LossFunctions.LossFunction;
 
 import java.io.File;
 import java.io.IOException;
+import java.lang.reflect.Array;
 import java.net.URL;
 import java.nio.charset.Charset;
+import java.util.ArrayList;
 import java.util.Random;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**GravesLSTM Character modelling example
  * @author Alex Black
@@ -45,10 +54,10 @@ public class GravesLSTMCharModellingExample {
         int miniBatchSize = 32;						//Size of mini batch to use when  training
         int exampleLength = 1000;					//Length of each training example sequence to use. This could certainly be increased
         int tbpttLength = 50;                       //Length for truncated backpropagation through time. i.e., do parameter updates ever 50 characters
-        int numEpochs = 100;							//Total number of training epochs
+        int numEpochs = 100;						//Total number of training epochs
         int generateSamplesEveryNMinibatches = 10;  //How frequently to generate samples from the network? 1000 characters / 50 tbptt length: 20 parameter updates per minibatch
         int nSamplesToGenerate = 2;					//Number of samples to generate after each training epoch
-        int nCharactersToSample = 300;				//Length of each sample to generate
+        int nCharactersToSample = 100;				//Length of each sample to generate
         String generationInitialization = null;		//Optional character initialization; a random character is used if null
         // Above is Used to 'prime' the LSTM with a character sequence to continue/complete.
         // Initialization characters must all be in CharacterIterator.getMinimalCharacterSet() by default
@@ -58,7 +67,10 @@ public class GravesLSTMCharModellingExample {
 
         //Get a DataSetIterator that handles vectorization of text into something we can use to train
         // our GravesLSTM network.
-        CharacterIterator iter = getTimeCubeIterator(miniBatchSize,exampleLength);
+       // CharacterIterator iter = getTimeCubeIterator(miniBatchSize,exampleLength);
+
+        StringWordIterator iter = new StringWordIterator("./src/main/resources/timecube.txt", miniBatchSize, exampleLength, rng);
+
         int nOut = iter.totalOutcomes();
 
         //Set up network configuration:
@@ -102,27 +114,67 @@ public class GravesLSTMCharModellingExample {
 
         //Do training, and then generate and print samples from network
         int miniBatchNumber = 0;
+
         for( int i=0; i<numEpochs; i++ ){
-            System.out.println("Epoch: " + i);
+            long start = System.currentTimeMillis();
+            System.out.print("Epoch: " + i);
             while(iter.hasNext()){
                 DataSet ds = iter.next();
                 net.fit(ds);
             }
+            long now = System.currentTimeMillis();
+            double seconds = (now - start)/1000d;
+            System.out.println("  " + seconds + " secs");
 
-            System.out.println("--------------------");
-            System.out.println("Sampling characters from network given initialization \"" + (generationInitialization == null ? "" : generationInitialization) + "\"");
-            String[] samples = sampleCharactersFromNetwork(generationInitialization,net,iter,rng,nCharactersToSample,nSamplesToGenerate);
-            for( int j=0; j<samples.length; j++ ){
-                System.out.println("----- Sample " + j + " -----");
-                System.out.println(samples[j]);
-                System.out.println();
+            if(i % 20 == 0) {
+                generateSample(nSamplesToGenerate, nCharactersToSample, generationInitialization, rng, iter, net);
             }
 
             iter.reset();	//Reset iterator for another epoch
         }
 
+        generateSample(nSamplesToGenerate, nCharactersToSample, generationInitialization, rng, iter, net);
+
         ModelSerializer.writeModel(net, savedNetwork, true);
         System.out.println("\n\nExample complete");
+    }
+
+    private static void generateSample(int nSamplesToGenerate, int nCharactersToSample, String generationInitialization, Random rng, StringWordIterator iter, MultiLayerNetwork net) {
+        System.out.println("--------------------");
+        System.out.println("Sampling characters from network given initialization \"" + (generationInitialization == null ? "" : generationInitialization) + "\"");
+        String[] samples = sampleWordsFromNetwork(generationInitialization, net, iter, rng, nCharactersToSample, nSamplesToGenerate);
+        for (int j = 0; j < samples.length; j++) {
+            System.out.println("----- Sample " + j + " -----");
+            System.out.println(samples[j]);
+
+            ArrayList<String> sentences = extractSentences(samples[j]);
+
+            for (int k = 0; k < sentences.size(); k++) {
+                System.out.println("--Sentence " + k + ": " + sentences.get(k));
+            }
+
+            System.out.println();
+        }
+    }
+
+
+    private static ArrayList<String> extractSentences(String dp) {
+        ArrayList<String> sentences = new ArrayList<>();
+        Pattern pattern = Pattern.compile("([?.]\\s+[A-Za-z*@])");
+        Matcher m = pattern.matcher(dp);
+
+        m.find();
+        int startIndex = m.start() + 1;
+        int endIndex = dp.length();
+        while (m.find()) {
+            endIndex = m.end() - 1;
+
+            sentences.add(dp.substring(startIndex, endIndex));
+
+            startIndex = m.start() + 1;
+        }
+
+        return sentences;
     }
 
     /** Downloads Shakespeare training data and stores it locally (temp directory). Then set up and return a simple
@@ -161,14 +213,62 @@ public class GravesLSTMCharModellingExample {
                 miniBatchSize, sequenceLength, validCharacters, new Random(12345));
     }
 
-    /** Generate a sample from the network, given an (optional, possibly null) initialization. Initialization
-     * can be used to 'prime' the RNN with a sequence you want to extend/continue.<br>
-     * Note that the initalization is used for all samples
-     * @param initialization String, may be null. If null, select a random character as initialization for all samples
-     * @param charactersToSample Number of characters to sample from network (excluding initialization)
-     * @param net MultiLayerNetwork with one or more GravesLSTM/RNN layers and a softmax output layer
-     * @param iter CharacterIterator. Used for going from indexes back to characters
-     */
+    private static String[] sampleWordsFromNetwork(String initialization, MultiLayerNetwork net,
+                                                   StringWordIterator iter, Random rng, int wordsToSample, int numSamples ) {
+        //Set up initialization. If no initialization: use a random character
+        if( initialization == null ){
+            initialization = iter.getRandomWord();
+        }
+
+
+        //Create input for initialization
+        INDArray initializationInput = Nd4j.zeros(numSamples, iter.inputColumns(), initialization.length());
+        String[] init = initialization.split(" ");
+        for( int i=0; i<init.length; i++ ){
+            int idx = iter.convertWordToIndex(init[i]);
+            for( int j=0; j<numSamples; j++ ){
+                initializationInput.putScalar(new int[]{j,idx,i}, 1.0f);
+            }
+        }
+
+        StringBuilder[] sb = new StringBuilder[numSamples];
+        for( int i=0; i<numSamples; i++ ) sb[i] = new StringBuilder(initialization + " ");
+
+        //Sample from network (and feed samples back into input) one character at a time (for all samples)
+        //Sampling is done in parallel here
+        net.rnnClearPreviousState();
+        INDArray output = net.rnnTimeStep(initializationInput);
+        output = output.tensorAlongDimension(output.size(2)-1,1,0);	//Gets the last time step output
+
+        for( int i=0; i<wordsToSample; i++ ){
+            //Set up next input (single time step) by sampling from previous output
+            INDArray nextInput = Nd4j.zeros(numSamples,iter.inputColumns());
+            //Output is a probability distribution. Sample from this for each example we want to generate, and add it to the new input
+            for( int s=0; s<numSamples; s++ ){
+                double[] outputProbDistribution = new double[iter.totalOutcomes()];
+                for( int j=0; j<outputProbDistribution.length; j++ ) outputProbDistribution[j] = output.getDouble(s,j);
+                int sampledCharacterIdx = sampleFromDistribution(outputProbDistribution,rng);
+
+                nextInput.putScalar(new int[]{s,sampledCharacterIdx}, 1.0f);		//Prepare next time step input
+                sb[s].append(iter.convertIndexToWord(sampledCharacterIdx));	//Add sampled character to StringBuilder (human readable output)
+                sb[s].append(" ");
+            }
+
+            output = net.rnnTimeStep(nextInput);	//Do one time step of forward pass
+        }
+
+        String[] out = new String[numSamples];
+        for( int i=0; i<numSamples; i++ ) out[i] = sb[i].toString();
+        return out;
+    }
+        /** Generate a sample from the network, given an (optional, possibly null) initialization. Initialization
+         * can be used to 'prime' the RNN with a sequence you want to extend/continue.<br>
+         * Note that the initalization is used for all samples
+         * @param initialization String, may be null. If null, select a random character as initialization for all samples
+         * @param charactersToSample Number of characters to sample from network (excluding initialization)
+         * @param net MultiLayerNetwork with one or more GravesLSTM/RNN layers and a softmax output layer
+         * @param iter CharacterIterator. Used for going from indexes back to characters
+         */
     private static String[] sampleCharactersFromNetwork(String initialization, MultiLayerNetwork net,
                                                         CharacterIterator iter, Random rng, int charactersToSample, int numSamples ){
         //Set up initialization. If no initialization: use a random character
